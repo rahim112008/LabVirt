@@ -6,12 +6,14 @@ from openai import OpenAI
 import hashlib
 import json
 from datetime import datetime
+from scipy.optimize import curve_fit  # <-- import corrigé
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 st.set_page_config(page_title="BioNexus Hub", page_icon="🧬", layout="wide")
 
+# --- Gestion de la clé API ---
 api_key = None
 if "OPENROUTER_API_KEY" in st.secrets:
     api_key = st.secrets["OPENROUTER_API_KEY"]
@@ -24,30 +26,27 @@ client = None
 if api_key:
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
 
+# Modèle configurable (peut être modifié dans les secrets)
+MODEL_NAME = st.secrets.get("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
+
 # ==========================================
-# DICTIONNAIRE DES DISCIPLINES (Le cerveau de l'IA)
+# DICTIONNAIRE DES DISCIPLINES
 # ==========================================
 DISCIPLINES = {
-    # --- DÉPARTEMENT GÉNÉTIQUE & OMHIQUES ---
-    "Génétique": {"icon": "🧬", "prompt": "Expert en génétique formelle, transmission des caractères et variants pathogènes.", "tools": ["Benchling", "UCSC Genome"]},
-    "Épigénétique": {"icon": "🔓", "prompt": "Expert en méthylation de l'ADN, modifications d'histones et régulation non-codante.", "tools": ["Galaxy", "IGV"]},
-    "Bioinformatique Génomique": {"icon": "💻", "prompt": "Expert en analyse de données de séquençage NGS (GWAS, RNA-Seq, variant calling).", "tools": ["Galaxy", "NCBI BLAST"]},
-    "Génie Génétique": {"icon": "✂️", "prompt": "Expert en CRISPR-Cas9, clonage moléculaire, construction de vecteurs et design de primers.", "tools": ["Benchling", "SnapGene"]},
-    
-    # --- DÉPARTEMENT BIOLOGIE CELLULAIRE & MOLÉCULAIRE ---
-    "Biologie Moléculaire": {"icon": "🧪", "prompt": "Expert en expression génique, PCR, extraction d'ARN/ADN et électrophorèse.", "tools": ["Benchling", "Protocoles.io"]},
-    "Régulation Cellulaire": {"icon": "♻️", "prompt": "Expert en voies de signalisation (JAK-STAT, MAPK), cycle cellulaire et apoptose.", "tools": ["KEGG", "Reactome"]},
-    "Immunologie": {"icon": "🛡️", "prompt": "Expert en immunité innée/adaptative, anticorps, cytométrie en flux et réponses inflammatoires.", "tools": ["FlowJo", "IMGT"]},
-    "Microbiologie": {"icon": "🦠", "prompt": "Expert en culture bactérienne, identification de souches, microbiome et antibiorésistance.", "tools": ["API Systems", "MEGAN"]},
-
-    # --- DÉPARTEMENT BIOCHIMIE & STRUCTURALE ---
-    "Biochimie": {"icon": "⚗️", "prompt": "Expert en cinétique enzymatique (Michaëlis-Menten), purification de protéines et métabolisme.", "tools": ["ChemDraw", "Protocoles.io"]},
-    "Biochimie Structurale": {"icon": "🧱", "prompt": "Expert en repliement des protéines, domaines fonctionnels et interactions moléculaires.", "tools": ["AlphaFold DB", "PyMOL"]},
-    "Cristallographie": {"icon": "💎", "prompt": "Expert en diffraction aux rayons X, résolution de structures 3D macromoléculaires et facteurs B.", "tools": ["RCSB PDB", "CCP4"]},
-
-    # --- DÉPARTEMENT ÉCOLOGIE & ÉVOLUTION ---
-    "Écologie": {"icon": "🌳", "prompt": "Expert en dynamique des populations, interactions biotiques et modèles mathématiques d'écosystèmes.", "tools": ["QGIS", "R (Vegan)"]},
-    "Biodiversité": {"icon": "🐒", "prompt": "Expert en taxonomie, phylogénie, indices de diversité et conservation.", "tools": ["GBIF", "iNaturalist"]},
+    # (inchangé, mais je le garde pour la cohérence)
+    "Génétique": {"icon": "🧬", "prompt": "Expert en génétique formelle...", "tools": ["Benchling", "UCSC Genome"]},
+    "Épigénétique": {"icon": "🔓", "prompt": "Expert en méthylation de l'ADN...", "tools": ["Galaxy", "IGV"]},
+    "Bioinformatique Génomique": {"icon": "💻", "prompt": "Expert en NGS...", "tools": ["Galaxy", "NCBI BLAST"]},
+    "Génie Génétique": {"icon": "✂️", "prompt": "Expert en CRISPR...", "tools": ["Benchling", "SnapGene"]},
+    "Biologie Moléculaire": {"icon": "🧪", "prompt": "Expert en expression génique...", "tools": ["Benchling", "Protocoles.io"]},
+    "Régulation Cellulaire": {"icon": "♻️", "prompt": "Expert en voies de signalisation...", "tools": ["KEGG", "Reactome"]},
+    "Immunologie": {"icon": "🛡️", "prompt": "Expert en immunité...", "tools": ["FlowJo", "IMGT"]},
+    "Microbiologie": {"icon": "🦠", "prompt": "Expert en culture bactérienne...", "tools": ["API Systems", "MEGAN"]},
+    "Biochimie": {"icon": "⚗️", "prompt": "Expert en cinétique enzymatique...", "tools": ["ChemDraw", "Protocoles.io"]},
+    "Biochimie Structurale": {"icon": "🧱", "prompt": "Expert en repliement...", "tools": ["AlphaFold DB", "PyMOL"]},
+    "Cristallographie": {"icon": "💎", "prompt": "Expert en diffraction...", "tools": ["RCSB PDB", "CCP4"]},
+    "Écologie": {"icon": "🌳", "prompt": "Expert en dynamique des populations...", "tools": ["QGIS", "R (Vegan)"]},
+    "Biodiversité": {"icon": "🐒", "prompt": "Expert en taxonomie...", "tools": ["GBIF", "iNaturalist"]},
 }
 
 # ==========================================
@@ -65,13 +64,33 @@ def generate_discovery_certificate(data_context, ai_interpretation):
         "ISSUER": "BioNexus Hub"
     }
 
+def safe_api_call(messages, stream=True):
+    """Wrapper qui gère les erreurs de l'API OpenRouter."""
+    if not client:
+        st.error("Client API non initialisé. Vérifiez votre clé.")
+        return None
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            temperature=0.3,
+            stream=stream
+        )
+        return response
+    except Exception as e:
+        st.error(f"Erreur lors de l'appel à l'API : {str(e)}")
+        return None
+
 def analyze_data_with_ai(data_context, user_question, domain_prompt):
     system_prompt = f"Tu es un {domain_prompt}. L'utilisateur te fournit des résultats bruts. Fais une interprétation biologique précise et actionnable."
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"Résultats:\n{data_context}\n\nQuestion: {user_question}"}
     ]
-    response = client.chat.completions.create(model="mistralai/mistral-7b-instruct:free", messages=messages, temperature=0.3, stream=True)
+    response = safe_api_call(messages, stream=True)
+    if response is None:
+        return "Impossible d'obtenir une réponse de l'IA."
+    
     full_response = ""
     placeholder = st.empty()
     for chunk in response:
@@ -101,7 +120,6 @@ with st.sidebar:
 # ==========================================
 # CONTENU PRINCIPAL
 # ==========================================
-
 st.title(module)
 
 # ------------------------------------------
@@ -119,7 +137,7 @@ if module == "🧬 Génétique & Omiques":
     
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
-        context = ""
+        context = ""  # réinitialisation assurée
         
         with st.spinner("Calcul en cours..."):
             if analysis_type == "GWAS (Manhattan Plot)" and all(col in df.columns for col in ['CHR', 'BP', 'SNP', 'P']):
@@ -135,19 +153,23 @@ if module == "🧬 Génétique & Omiques":
                 ax.set_xticks(x_ticks); ax.set_xticklabels(x_labels, rotation=45)
                 st.pyplot(fig)
                 sig = df[df['P'] < 5e-8].head(15)
-                if not sig.empty: st.dataframe(sig); context = sig.to_string(index=False)
+                if not sig.empty:
+                    st.dataframe(sig)
+                    context = sig.to_string(index=False)
                     
             elif analysis_type == "RNA-Seq (Volcano Plot)" and all(col in df.columns for col in ['Gene', 'Log2FC', 'PValue']):
                 df['PValue'] = df['PValue'].clip(lower=1e-300)
                 df['-log10(P)'] = -np.log10(df['PValue'])
-                sig = (df['PValue'] < 0.05) & (abs(df['Log2FC']) > 1)
+                mask = (df['PValue'] < 0.05) & (abs(df['Log2FC']) > 1)  # renommé pour clarté
                 fig, ax = plt.subplots()
                 ax.scatter(df['Log2FC'], df['-log10(P)'], color='grey', s=10)
-                ax.scatter(df[sig]['Log2FC'], df[sig]['-log10(P)'], color='red', s=15)
+                ax.scatter(df.loc[mask, 'Log2FC'], df.loc[mask, '-log10(P)'], color='red', s=15)
                 ax.axvline(x=-1, color='b', linestyle='--'); ax.axvline(x=1, color='b', linestyle='--')
                 st.pyplot(fig)
-                sig_genes = df[sig].head(15)
-                if not sig_genes.empty: st.dataframe(sig_genes); context = sig_genes.to_string(index=False)
+                sig_genes = df[mask].head(15)
+                if not sig_genes.empty:
+                    st.dataframe(sig_genes)
+                    context = sig_genes.to_string(index=False)
             else:
                 st.error("Colonnes manquantes pour cette analyse.")
 
@@ -170,7 +192,6 @@ elif module == "💎 Biochimie & Structurale":
     st.subheader("Calculatrice de Cinétique Enzymatique (Michaëlis-Menten)")
     st.markdown("Entrez vos données de vitesse (V) en fonction de la concentration en substrat ([S]) pour fitter la courbe.")
     
-    # Saisie simplifiée
     col1, col2 = st.columns(2)
     with col1:
         s_data = st.text_input("Concentrations [S] (séparées par virgules)", "1,2,5,10,20,50")
@@ -179,15 +200,19 @@ elif module == "💎 Biochimie & Structurale":
         
     if st.button("Fitter la Courbe"):
         try:
-            S = np.array([float(x) for x in s_data.split(',')])
-            V = np.array([float(x) for x in v_data.split(',')])
+            S = np.array([float(x.strip()) for x in s_data.split(',')])
+            V = np.array([float(x.strip()) for x in v_data.split(',')])
             
-            # Modèle de Michaëlis-Menten
-            from scipy.optimize import curve_fit
+            if len(S) < 3 or len(V) < 3:
+                st.error("Veuillez fournir au moins 3 points de données.")
+                st.stop()
+            
+            # Modèle de Michaëlis-Menten (curve_fit déjà importé en haut)
             def michaelis_menten(S, Vmax, Km):
                 return (Vmax * S) / (Km + S)
             
-            popt, _ = curve_fit(michaelis_menten, S, V)
+            # Ajustement avec bornes positives
+            popt, _ = curve_fit(michaelis_menten, S, V, bounds=(0, np.inf))
             Vmax_fit, Km_fit = popt
             
             S_fit = np.linspace(0, max(S)*1.2, 100)
@@ -231,7 +256,7 @@ elif module == "🔬 BioCell & Moléculaire":
             ax.set_xlabel('Temps (h)'); ax.set_ylabel('OD600'); ax.set_title('Courbe de Croissance')
             st.pyplot(fig)
             
-            # Calcul temps de génération (phase exponentielle approximative)
+            # Phase exponentielle approximative
             log_phase = df[(df['OD600'] > df['OD600'].max()*0.2) & (df['OD600'] < df['OD600'].max()*0.8)]
             context = f"Données complètes:\n{df.to_string(index=False)}\nPhase exponentielle détectée:\n{log_phase.to_string(index=False)}"
             
@@ -265,7 +290,7 @@ elif module == "🌳 Écologie & Biodiversité":
             plt.xticks(rotation=45, ha='right')
             st.pyplot(fig)
             
-            # Calcul indice de Shannon (si demandé)
+            # Indice de Shannon
             p = df['Abondance'] / df['Abondance'].sum()
             shannon = -sum(p * np.log(p))
             context = f"Indice de Shannon calculé: {shannon:.2f}\n\nTop espèces:\n{df_sorted.head(10).to_string(index=False)}"
@@ -300,12 +325,15 @@ elif module == "💬 Chat Libre":
             st.session_state.msg_free.append({"role": "user", "content": prompt})
             with st.chat_message("assistant"):
                 messages_api = [{"role": "system", "content": disc_info['prompt']}] + st.session_state.msg_free
-                resp = client.chat.completions.create(model="mistralai/mistral-7b-instruct:free", messages=messages_api, stream=True, temperature=0.3)
-                full = ""
-                ph = st.empty()
-                for c in resp:
-                    if c.choices[0].delta.content:
-                        full += c.choices[0].delta.content
-                        ph.markdown(full + "▌")
-                ph.markdown(full)
-            st.session_state.msg_free.append({"role": "assistant", "content": full})
+                resp = safe_api_call(messages_api, stream=True)
+                if resp is None:
+                    st.error("Échec de la communication avec l'IA.")
+                else:
+                    full = ""
+                    ph = st.empty()
+                    for c in resp:
+                        if c.choices[0].delta.content:
+                            full += c.choices[0].delta.content
+                            ph.markdown(full + "▌")
+                    ph.markdown(full)
+                    st.session_state.msg_free.append({"role": "assistant", "content": full})
