@@ -27,7 +27,7 @@ if api_key:
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
 
 # Modèle configurable (peut être modifié dans les secrets)
-MODEL_NAME = st.secrets.get("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
+MODEL_NAME = "google/gemini-2.0-flash-lite-preview-02-05:free"
 
 # ==========================================
 # DICTIONNAIRE DES DISCIPLINES
