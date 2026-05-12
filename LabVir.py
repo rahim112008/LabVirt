@@ -26,8 +26,8 @@ client = None
 if api_key:
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
 
-# Modèle configurable (peut être modifié dans les secrets)
-MODEL_NAME = "google/gemini-2.0-flash-lite-preview-02-05:free"
+# Remplacez l'ancien ID par l'une de ces options :
+MODEL_NAME = "google/gemma-3-27b-it:free"
 
 # ==========================================
 # DICTIONNAIRE DES DISCIPLINES
