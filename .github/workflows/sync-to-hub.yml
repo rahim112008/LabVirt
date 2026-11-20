@@ -1,0 +1,19 @@
+name: Sync to Hugging Face Hub
+
+on:
+  push:
+    branches: [main] # Remplacez 'main' par 'master' si c'est le nom de votre branche principale sur GitHub
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+      - uses: huggingface/hub-sync@v0.3.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          huggingface_repo_id: salim11/LabVirt
+          hf_token: ${{ secrets.HF_TOKEN }}
