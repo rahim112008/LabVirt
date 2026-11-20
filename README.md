@@ -1,5 +1,5 @@
 ---
-title: Mon Application Omics
+title: LabVirt
 emoji: 🧬
 colorFrom: blue
 colorTo: indigo
